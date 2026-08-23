@@ -1,0 +1,22 @@
+{
+  "name": "hivemind",
+  "owner": {
+    "name": "N Hanish",
+    "email": "nn_25bebt@acharya.ac.in"
+  },
+  "metadata": {
+    "description": "Orchestrate free opencode worker swarms from Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "hivemind",
+      "description": "Delegate grunt work to headless opencode workers (scout/coder/tester) on free models while Claude Code stays the planner, reviewer, and merger",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/hivemind"
+      ]
+    }
+  ]
+}
