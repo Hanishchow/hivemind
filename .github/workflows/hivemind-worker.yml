@@ -1,0 +1,113 @@
+name: Hivemind worker
+
+# Runs a hivemind worker on a GitHub runner instead of a laptop, backed by
+# OpenRouter rather than opencode's free tier (which returns 404s and empty
+# responses often enough that it cannot be depended on unattended).
+#
+# Requires one repository secret: OPENROUTER_API_KEY.
+# Set it yourself, never through a chat transcript:
+#   gh secret set OPENROUTER_API_KEY --repo Hanishchow/hivemind < path/to/key.txt
+# or Settings -> Secrets and variables -> Actions -> New repository secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'What the worker should do'
+        required: true
+        type: string
+      path:
+        description: 'Directory in this repo to give the worker as context (blank = none)'
+        required: false
+        type: string
+        default: ''
+      model:
+        description: 'OpenRouter model id'
+        required: false
+        type: string
+        default: 'google/gemini-2.5-flash'
+      json:
+        description: 'Force a JSON reply'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check the secret is present
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "secret present (${#OPENROUTER_API_KEY} chars)"
+
+      - name: Run worker
+        id: run
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TASK: ${{ inputs.task }}
+          MODEL: ${{ inputs.model }}
+          DIRPATH: ${{ inputs.path }}
+          WANT_JSON: ${{ inputs.json }}
+        run: |
+          # Inputs go through the environment, never interpolated into the
+          # command line, so a task containing quotes or backticks cannot break
+          # out into the shell.
+          args=(skills/hivemind/scripts/or-worker.mjs --model "$MODEL" --timeout 600)
+          [ -n "$DIRPATH" ] && args+=(--dir "$DIRPATH")
+          [ "$WANT_JSON" = "true" ] && args+=(--json)
+          args+=("$TASK")
+
+          set +e
+          node "${args[@]}" > result.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Publish result
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          try:
+              d = json.loads(pathlib.Path("result.json").read_text(encoding="utf-8").strip().splitlines()[-1])
+          except Exception as e:
+              print("## Hivemind worker\n\nCould not read a result line.\n")
+              raise SystemExit(0)
+          print("## Hivemind worker\n")
+          if not d.get("ok"):
+              print(f"**Failed** at stage `{d.get('stage')}`\n\n> {d.get('error')}\n")
+              raise SystemExit(0)
+          t = d.get("tokens") or {}
+          print(f"`{d.get('model')}` · {t.get('total') or '?'} tokens · {d.get('duration_ms')} ms\n")
+          print("<details><summary>Result</summary>\n")
+          print("```")
+          print(str(d.get("result", ""))[:60000])
+          print("```")
+          print("</details>")
+          PY
+
+      - name: Upload raw result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-result
+          path: result.json
+          if-no-files-found: warn
+
+      - name: Fail if the worker failed
+        if: steps.run.outputs.code != '0'
+        run: exit 1
