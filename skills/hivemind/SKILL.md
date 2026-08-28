@@ -126,6 +126,32 @@ Key comes from `OPENROUTER_API_KEY`, else `~/.claude/.openrouter_key`. Never pas
 into a prompt, a committed file, or a transcript. In CI it comes from a repository secret.
 Unlike opencode's free tier, OpenRouter bills — check the model's price before a fan-out.
 
+## Choosing a model (measured, not guessed)
+
+Free tiers failed six times out of six across both providers, for five different reasons:
+
+| model | outcome |
+|---|---|
+| `opencode/nemotron-3.5-lightning-free` | provider 404 |
+| `opencode/hy3-free` | empty body |
+| `meta-llama/llama-3.3-70b-instruct:free` | 404 — silently stopped being free |
+| `minimax/minimax-m3:free` | 429, rate-limited upstream |
+| `nvidia/nemotron-3.5-lightning:free` (OpenRouter) | returned no content |
+| `openrouter/free` with `--json` | could not produce parseable JSON, even after the corrective retry |
+
+But `openrouter/free` WITHOUT `--json` answered correctly at zero cost. So the split is
+capability, not availability:
+
+- **Structured output (`--json`) — use a paid model.** Free models cannot reliably emit
+  parseable JSON, and every hivemind contract downstream depends on it. A verified
+  `google/gemini-2.5-flash` call cost $0.0000506. Fractions of a cent beat a pipeline that
+  fails at 3am.
+- **Prose, summaries, drafting — free is fine**, when a human is present to retry. Do not
+  put a free model on a schedule.
+- **Never hardcode a free model id.** They stop being free without warning. List what is
+  actually free today with the public models endpoint (no key required):
+  `curl.exe -s https://openrouter.ai/api/v1/models` and filter `pricing.prompt == 0`.
+
 ## Running workers in CI
 
 `.github/workflows/hivemind-worker.yml` runs a worker on a GitHub runner via
