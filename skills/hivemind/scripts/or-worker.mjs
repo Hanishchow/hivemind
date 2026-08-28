@@ -50,7 +50,7 @@ function apiKey() {
 
 function parseArgs(argv) {
   const o = { model: DEFAULT_MODEL, dir: null, files: null, system: null, json: false,
-              run: null, label: null, timeoutMs: 900_000, task: [] };
+              run: null, label: null, timeoutMs: 900_000, maxTokens: 8000, task: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--model") o.model = argv[++i] ?? o.model;
@@ -61,6 +61,7 @@ function parseArgs(argv) {
     else if (a === "--run") o.run = argv[++i] ?? null;
     else if (a === "--label") o.label = argv[++i] ?? null;
     else if (a === "--timeout") o.timeoutMs = (Number(argv[++i]) || 900) * 1000;
+    else if (a === "--max-tokens") o.maxTokens = Number(argv[++i]) || o.maxTokens;
     else o.task.push(a);
   }
   o.task = o.task.join(" ").trim();
@@ -122,6 +123,9 @@ async function callModel(key, opts, messages) {
     body: JSON.stringify({
       model: opts.model,
       messages,
+      // Without an explicit ceiling OpenRouter reserves the model's maximum and
+      // rejects the call with 402 on a small balance, even for a tiny reply.
+      max_tokens: opts.maxTokens,
       ...(opts.json ? { response_format: { type: "json_object" } } : {}),
     }),
     signal: AbortSignal.timeout(opts.timeoutMs),
@@ -129,7 +133,8 @@ async function callModel(key, opts, messages) {
   const text = await res.text();
   if (!res.ok) {
     // Never surface the body verbatim past a bound; it can echo request detail.
-    return { ok: false, stage: "api", error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+    const stage = res.status === 402 ? "credit" : res.status === 429 ? "ratelimit" : "api";
+    return { ok: false, stage, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
   }
   let body;
   try { body = JSON.parse(text); } catch { return { ok: false, stage: "parse", error: "response was not JSON" }; }

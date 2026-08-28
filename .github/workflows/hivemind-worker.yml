@@ -108,6 +108,29 @@ jobs:
           path: result.json
           if-no-files-found: warn
 
+      # or-worker.mjs always exits 0 by design - its contract is a single JSON
+      # line carrying ok:false. Trusting the exit code let a failed worker
+      # report a green run, so the verdict has to come from the payload.
       - name: Fail if the worker failed
-        if: steps.run.outputs.code != '0'
-        run: exit 1
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          try:
+              d = json.loads(pathlib.Path("result.json").read_text(encoding="utf-8").strip().splitlines()[-1])
+          except Exception as e:
+              print(f"::error::could not read result.json: {e}")
+              sys.exit(1)
+          if d.get("ok"):
+              print("worker ok")
+              sys.exit(0)
+          stage = d.get("stage", "?")
+          hint = {
+              "credit": "OpenRouter balance too low for the requested max_tokens. Add credit, lower --max-tokens, or use a ':free' model.",
+              "ratelimit": "Rate limited. Retry later or slow the fan-out.",
+              "args": "Bad invocation or missing OPENROUTER_API_KEY.",
+              "schema": "Model did not return parseable JSON even after the corrective retry.",
+          }.get(stage, "")
+          print(f"::error::worker failed at stage '{stage}'. {hint}")
+          sys.exit(1)
+          PY
