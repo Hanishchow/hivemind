@@ -50,6 +50,8 @@ Runtime state (`.runs/*.jsonl`) is written inside this folder and is gitignored.
 | `scripts/oc-aggregate.mjs` | Dedupe/synthesize N worker outputs; consensus findings first |
 | `scripts/bench/run-bench.mjs` | Benchmark configs A (claude solo), B (opencode solo), C (orchestrated swarm) |
 | `scripts/bench/grader-prompt.md` | Blind grading rubric (max 12 pts + PASS/FAIL gate) |
+| `scripts/oc-verify.mjs` | Fan a worker's claims to a verifier on a DIFFERENT model; returns counts + `needs_review` |
+| `scripts/or-worker.mjs` | Same contract over OpenRouter; use when opencode is down or the worker must run in CI |
 | `commands/` (repo root) | Slash-command entry points; registered automatically by the plugin |
 | `assets/agents/` | scout / coder / tester agent definitions for opencode |
 
@@ -89,6 +91,47 @@ valid URL with a numeric port; anything else fails fast with a single `stage:"ar
 rather than reaching the spawned process.
 
 
+## Verify instead of re-reading (do this before you trust a claim)
+
+Re-checking every worker claim yourself costs more than the delegation saved. Send the
+claims to a verifier instead:
+
+```
+node scripts/oc-verify.mjs --dir <same dir the worker saw> --claims findings.json --run <id>
+```
+
+Returns `{ confirmed, refuted, unsupported, unverified, needs_review[] }`. Read
+`needs_review` only — those are the refuted and unsupported claims. Confirmed claims are
+counts, not prose, and do not come back into your context.
+
+HARD RULES for this stage:
+- The verifier MUST run on a different model from the worker. Same model = same blind
+  spots = a rubber stamp. Default is `nemotron-3.5-lightning-free` against a `mimo` worker.
+- The verifier sees the FILES and the claims, never the worker's reasoning.
+- It defaults to REFUTED when uncertain, because a false CONFIRMED is acted on unchecked.
+- `unverified > 0` means the verifier skipped claims. Treat those as unverified, not passed.
+- Still spot-check a sample yourself. Two free models agreeing is evidence, not proof.
+
+## Providers: opencode is not always up
+
+`opencode/*` free models return provider 404s and empty bodies often enough that an
+unattended swarm cannot depend on them. `or-worker.mjs` speaks the identical one-JSON-line
+contract over OpenRouter, so every downstream script works unchanged:
+
+```
+node scripts/or-worker.mjs --model google/gemini-2.5-flash --dir <path> --json "TASK"
+```
+
+Key comes from `OPENROUTER_API_KEY`, else `~/.claude/.openrouter_key`. Never paste a key
+into a prompt, a committed file, or a transcript. In CI it comes from a repository secret.
+Unlike opencode's free tier, OpenRouter bills — check the model's price before a fan-out.
+
+## Running workers in CI
+
+`.github/workflows/hivemind-worker.yml` runs a worker on a GitHub runner via
+`workflow_dispatch`, so work continues when the laptop is closed. Inputs reach the script
+through the environment, never interpolated into a shell command line.
+
 ## Golden Rule (non-negotiable)
 
 Raw opencode NDJSON streams must NEVER enter your context. All output arrives via the
@@ -106,7 +149,8 @@ If files were written: show `git diff` before letting the user commit.
 1. Decompose task into 2-5 INDEPENDENT subtasks (no shared files).
 2. Writing workers get isolated worktrees FIRST: `git worktree add ../<repo>-wt-N -b swarm/N`.
 3. Issue ALL worker invocations as PARALLEL Bash tool calls in ONE message.
-4. Review every diff yourself (`git diff main...swarm/N`). YOU are the only merger.
+4. Run `oc-verify.mjs` over the workers' claims, then review `needs_review` plus every
+   diff yourself (`git diff main...swarm/N`). YOU are the only merger.
 5. Merge approved branches, remove worktrees, run tests.
 6. Report table: subtask | agent | tokens | outcome + total worker tokens.
 
