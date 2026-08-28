@@ -1,3 +1,21 @@
 .runs/
 bench-results.jsonl
 node_modules/
+
+# Credentials - never commit these. A key in git history stays there even
+# after the file is deleted, so the only real fix is rotating the key.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+key.txt
+keys.txt
+.openrouter_key
+*_api_key*
+*apikey*
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+.netrc
